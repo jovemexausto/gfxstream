@@ -2255,7 +2255,7 @@ bool VkEmulation::allocExternalMemory(VulkanDispatch* vk, VkEmulation::ExternalM
                 // So, do server-side allocation first, then import to Vulkan.
                 // Note: External memory is only supported for ColorBuffers, in this case.
                 auto cbInfoPtr = *colorBufferInfo;
-                std::string bufferName = std::string("VkColorBuffer-") + std::to_string(cbInfoPtr->handle);
+                std::string bufferName = "VkColorBuffer-" + cbInfoPtr->handle;
                 auto screenStreamBuffer = gfxstream::qnx::createScreenStreamBuffer(
                     cbInfoPtr->width, cbInfoPtr->height, cbInfoPtr->format, bufferName);
                 if (!screenStreamBuffer) {
@@ -3664,7 +3664,7 @@ bool VkEmulation::readColorBufferPixelsScaledCpu(uint32_t colorBufferHandle, int
                                       readback_r8g8b8a8.data(), readback_r8g8b8a8.size())) {
         // Could not readback, cannot continue for resizing
         GFXSTREAM_ERROR("%s: Failed to readback color buffer %d (%" PRIu64 "x%" PRIu64 ", %s)",
-                        __func__, colorBufferHandle, readbackWidth, readbackHeight,
+                        colorBufferHandle, readbackWidth, readbackHeight,
                         ToString(colorBufferInfo->format).c_str());
         return false;
     }
@@ -4634,13 +4634,6 @@ bool VkEmulation::readBufferToBytes(uint32_t bufferHandle, uint64_t offset, uint
         return false;
     }
 
-    if (offset > bufferInfo->size || size > bufferInfo->size - offset) {
-        GFXSTREAM_ERROR("Failed to read from Buffer:%d, [offset %" PRIu64 ", size %" PRIu64
-                        "] out of range of buffer size %" PRIu64 ".",
-                        bufferHandle, offset, size, bufferInfo->size);
-        return false;
-    }
-
     const auto& stagingBufferInfo = mStaging;
     if (size > stagingBufferInfo.mAllocationSize) {
         GFXSTREAM_ERROR("Failed to read from Buffer:%d, staging buffer too small.", bufferHandle);
@@ -4724,13 +4717,6 @@ bool VkEmulation::updateBufferFromBytes(uint32_t bufferHandle, uint64_t offset, 
     auto bufferInfo = gfxstream::base::find(mBuffers, bufferHandle);
     if (!bufferInfo) {
         GFXSTREAM_ERROR("Failed to update Buffer:%d, not found.", bufferHandle);
-        return false;
-    }
-
-    if (offset > bufferInfo->size || size > bufferInfo->size - offset) {
-        GFXSTREAM_ERROR("Failed to update Buffer:%d, [offset %" PRIu64 ", size %" PRIu64
-                        "] out of range of buffer size %" PRIu64 ".",
-                        bufferHandle, offset, size, bufferInfo->size);
         return false;
     }
 

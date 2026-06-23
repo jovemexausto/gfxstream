@@ -27,7 +27,9 @@ namespace gfxstream {
 namespace host {
 namespace {
 
+#if GFXSTREAM_ENABLE_HOST_GLES
 using gl::ColorBufferGl;
+#endif
 using vk::ColorBufferVk;
 
 // ColorBufferVk natively supports YUV images. However, ColorBufferGl
@@ -158,7 +160,11 @@ std::unique_ptr<ColorBuffer::Impl> ColorBuffer::Impl::create(
 #endif
 
     if (emulationVk) {
+#if GFXSTREAM_ENABLE_HOST_GLES
         const bool vulkanOnly = colorBuffer->mColorBufferGl == nullptr;
+#else
+        const bool vulkanOnly = true;  // Capivara: no GL emulation
+#endif
         const uint32_t memoryProperty = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
         const uint32_t mipLevels = 1;
         colorBuffer->mColorBufferVk = vk::ColorBufferVk::create(
@@ -392,6 +398,9 @@ std::unique_ptr<BorrowedImageInfo> ColorBuffer::Impl::borrowForDisplay(UsedApi a
 }
 
 bool ColorBuffer::Impl::flushFromGl() {
+#if !GFXSTREAM_ENABLE_HOST_GLES
+    return true;  // Capivara: no GL emulation
+#else
     if (!(mColorBufferGl && mColorBufferVk)) {
         return true;
     }
@@ -404,9 +413,13 @@ bool ColorBuffer::Impl::flushFromGl() {
     // the "main"  should be updated from the current contents of the GL backing.
     mGlTexDirty = true;
     return true;
+#endif  // !GFXSTREAM_ENABLE_HOST_GLES
 }
 
 bool ColorBuffer::Impl::flushFromVk() {
+#if !GFXSTREAM_ENABLE_HOST_GLES
+    return true;  // Capivara: no GL emulation
+#else
     if (!(mColorBufferGl && mColorBufferVk)) {
         return true;
     }
@@ -432,9 +445,13 @@ bool ColorBuffer::Impl::flushFromVk() {
 #endif
     mGlTexDirty = false;
     return true;
+#endif  // !GFXSTREAM_ENABLE_HOST_GLES
 }
 
 bool ColorBuffer::Impl::flushFromVkBytes(const void* bytes, size_t bytesSize) {
+#if !GFXSTREAM_ENABLE_HOST_GLES
+    return true;  // Capivara: no GL emulation
+#else
     if (!(mColorBufferGl && mColorBufferVk)) {
         return true;
     }
@@ -453,9 +470,13 @@ bool ColorBuffer::Impl::flushFromVkBytes(const void* bytes, size_t bytesSize) {
 #endif
     mGlTexDirty = false;
     return true;
+#endif  // !GFXSTREAM_ENABLE_HOST_GLES
 }
 
 bool ColorBuffer::Impl::invalidateForGl() {
+#if !GFXSTREAM_ENABLE_HOST_GLES
+    return true;  // Capivara: no GL emulation
+#else
     if (!(mColorBufferGl && mColorBufferVk)) {
         return true;
     }
@@ -467,9 +488,13 @@ bool ColorBuffer::Impl::invalidateForGl() {
     // ColorBufferGl is currently considered the "main" backing. If this changes,
     // the GL backing should be updated from the "main" backing.
     return true;
+#endif  // !GFXSTREAM_ENABLE_HOST_GLES
 }
 
 bool ColorBuffer::Impl::invalidateForVk() {
+#if !GFXSTREAM_ENABLE_HOST_GLES
+    return true;  // Capivara: no GL emulation
+#else
     if (!(mColorBufferGl && mColorBufferVk)) {
         return true;
     }
@@ -496,6 +521,7 @@ bool ColorBuffer::Impl::invalidateForVk() {
 #endif
     mGlTexDirty = false;
     return true;
+#endif  // !GFXSTREAM_ENABLE_HOST_GLES
 }
 
 std::optional<BlobDescriptorInfo> ColorBuffer::Impl::exportBlob() {

@@ -32,6 +32,17 @@ else
   files_lib_common_base += 'Thread_pthread.cpp'
 endif
 
+if host_machine.system() == 'darwin'
+  # cpuUsageCurrentThread_macImpl and other macOS-specific utilities
+  files_lib_common_base += files('system-native-mac.mm')
+endif
+
+common_base_deps += [
+  dependency('appleframeworks',
+             modules: ['Foundation', 'IOKit', 'AppKit', 'CoreFoundation'],
+             required: host_machine.system() == 'darwin'),
+]
+
 lib_common_base = static_library(
   'common_base',
   files_lib_common_base,

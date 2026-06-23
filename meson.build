@@ -1,7 +1,7 @@
 # Copyright 2023 Android Open Source Project
 # SPDX-License-Identifier: Apache-2.0
 
-project('gfxstream', 'cpp', 'c',
+project('gfxstream', 'cpp', 'c', 'objc', 'objcpp',
          version : '0.1.2',
          license : 'Apache-2.0',
          default_options : ['cpp_std=gnu++17',
@@ -78,6 +78,12 @@ elif host_machine.system() == 'linux'
   gfxstream_host_args += '-DGFXSTREAM_UNSTABLE_VULKAN_EXTERNAL_SYNC=1'
   gfxstream_host_args += '-DGFXSTREAM_UNSTABLE_VULKAN_BLOB_COLOR_BUFFER=1'
   gfxstream_host_args += '-DHAVE_MEMFD_CREATE=1'
+elif host_machine.system() == 'darwin'
+  thread_dep = dependency('threads')
+  # macOS: Vulkan via MoltenVK (loaded at runtime as libvulkan.dylib)
+  gfxstream_host_args += '-DGFXSTREAM_PLATFORM_MACOS=1'
+  gfxstream_host_args += '-DVK_USE_PLATFORM_METAL_EXT=1'
+  gfxstream_host_args += '-DVK_USE_PLATFORM_MACOS_MVK=1'
 else
   thread_dep = dependency('threads')
 endif

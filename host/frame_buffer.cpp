@@ -56,6 +56,7 @@
 #include "gfxstream/host/window_operations.h"
 #include "gfxstream/synchronization/Lock.h"
 #include "gfxstream/system/System.h"
+#include "readback_worker.h"
 #include "render-utils/MediaNative.h"
 #include "vulkan/display_vk.h"
 #include "vulkan/post_worker_vk.h"
@@ -669,13 +670,6 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     void postLoadRenderThreadContextSurfacePtrs();
 
     gl::EmulationGl& getEmulationGl();
-    bool hasEmulationGl() const { return m_emulationGl != nullptr; }
-
-    vk::VkEmulation& getEmulationVk();
-    bool hasEmulationVk() const { return m_emulationVk != nullptr; }
-
-    bool setColorBufferVulkanMode(HandleType colorBufferHandle, uint32_t mode);
-    int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size);
 
     // Return the host EGLDisplay used by this instance.
     EGLDisplay getDisplay() const;
@@ -762,6 +756,13 @@ class FrameBuffer::Impl : public gfxstream::base::EventNotificationSupport<Frame
     const gl::EGLDispatch* getEglDispatch();
     const gl::GLESv2Dispatch* getGles2Dispatch();
 #endif
+
+    // These are non-GL-specific
+    vk::VkEmulation& getEmulationVk();
+    bool hasEmulationGl() const { return m_emulationGl != nullptr; }
+    bool hasEmulationVk() const { return m_emulationVk != nullptr; }
+    bool setColorBufferVulkanMode(HandleType colorBufferHandle, uint32_t mode);
+    int32_t mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, uint64_t size);
 
     // Retrieve the vendor info strings for the GPU driver used for the emulation.
     // On return, |*vendor|, |*renderer| and |*version| will point to strings
@@ -2072,9 +2073,11 @@ HandleType FrameBuffer::Impl::genHandle_locked() {
 
 bool FrameBuffer::Impl::isFormatSupported(GfxstreamFormat format) {
     bool supported = true;
+#if GFXSTREAM_ENABLE_HOST_GLES
     if (m_emulationGl) {
         supported &= m_emulationGl->isFormatSupported(format);
     }
+#endif
     if (m_emulationVk) {
         supported &= m_emulationVk->isFormatSupported(format);
     }
@@ -2461,8 +2464,8 @@ void FrameBuffer::Impl::cleanupProcGLObjects(uint64_t puid) {
 std::vector<HandleType> FrameBuffer::Impl::cleanupProcGLObjects_locked(uint64_t puid, bool forced) {
     std::vector<HandleType> colorBuffersToCleanup;
     {
-        std::unique_ptr<RecursiveScopedContextBind> bind = nullptr;
-#if GFXSTREAM_ENABLE_HOST_GLES
+    #if GFXSTREAM_ENABLE_HOST_GLES
+    std::unique_ptr<RecursiveScopedContextBind> bind = nullptr;
         if (m_emulationGl) {
             bind = std::make_unique<RecursiveScopedContextBind>(getPbufferSurfaceContextHelper());
         }
@@ -3239,8 +3242,8 @@ void FrameBuffer::Impl::onSave(Stream* stream, const ITextureSaverPtr& textureSa
     //     m_prevDrawSurf
     AutoLock mutex(m_lock);
 
-    std::unique_ptr<RecursiveScopedContextBind> bind;
 #if GFXSTREAM_ENABLE_HOST_GLES
+    std::unique_ptr<RecursiveScopedContextBind> bind;
     if (m_emulationGl) {
         // Some snapshot commands try using GL.
         bind = std::make_unique<RecursiveScopedContextBind>(getPbufferSurfaceContextHelper());
@@ -3367,8 +3370,8 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
     {
         sweepColorBuffersLocked();
 
-        std::unique_ptr<RecursiveScopedContextBind> bind;
 #if GFXSTREAM_ENABLE_HOST_GLES
+        std::unique_ptr<RecursiveScopedContextBind> bind;
         if (m_emulationGl) {
             // Some snapshot commands try using GL.
             bind = std::make_unique<RecursiveScopedContextBind>(getPbufferSurfaceContextHelper());
@@ -3592,8 +3595,8 @@ bool FrameBuffer::Impl::onLoad(Stream* stream, const ITextureLoaderPtr& textureL
 #endif
 
     {
-        std::unique_ptr<RecursiveScopedContextBind> bind;
 #if GFXSTREAM_ENABLE_HOST_GLES
+        std::unique_ptr<RecursiveScopedContextBind> bind;
         if (m_emulationGl) {
             // Some snapshot commands try using GL.
             bind = std::make_unique<RecursiveScopedContextBind>(getPbufferSurfaceContextHelper());
@@ -3960,6 +3963,24 @@ std::optional<BlobDescriptorInfo> FrameBuffer::Impl::exportBuffer(HandleType buf
     return buffer->exportBlob();
 }
 
+
+#if GFXSTREAM_ENABLE_HOST_GLES
+void FrameBuffer::Impl::createTrivialContext(HandleType shared, HandleType* contextOut,
+                                             HandleType* surfOut) {
+    assert(contextOut);
+    assert(surfOut);
+
+    *contextOut = createEmulatedEglContext(0, shared, GLESApi_2);
+    *surfOut = createEmulatedEglWindowSurface(0, 1, 1);
+}
+#else
+void FrameBuffer::Impl::createTrivialContext(HandleType shared, HandleType* contextOut,
+                                             HandleType* surfOut) {
+    if (contextOut) *contextOut = 0;
+    if (surfOut) *surfOut = 0;
+}
+#endif
+
 bool FrameBuffer::Impl::setColorBufferVulkanMode(HandleType colorBufferHandle, uint32_t mode) {
     if (!m_emulationVk) {
         GFXSTREAM_FATAL("VK emulation not enabled.");
@@ -3979,20 +4000,15 @@ int32_t FrameBuffer::Impl::mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t 
     return m_emulationVk->mapGpaToBufferHandle(bufferHandle, gpa, size);
 }
 
-#if GFXSTREAM_ENABLE_HOST_GLES
-HandleType FrameBuffer::Impl::getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface) {
-    AutoLock mutex(m_lock);
-
-    auto it = m_EmulatedEglWindowSurfaceToColorBuffer.find(p_surface);
-    if (it == m_EmulatedEglWindowSurfaceToColorBuffer.end()) {
-        return 0;
-    }
-
-    return it->second;
-}
 
 void FrameBuffer::Impl::setScreenMask(int width, int height, const uint8_t* rgbaData) {
     m_compositor->setScreenMask(width, height, rgbaData);
+}
+
+void FrameBuffer::Impl::setDisplayLayout(int screenWidth, int screenHeight,
+                                         const Rect& displayRect) {
+    AutoLock mutex(m_lock);
+    m_compositor->setDisplayLayout(screenWidth, screenHeight, displayRect);
 }
 
 void FrameBuffer::Impl::setScreenBackground(int width, int height, const uint8_t* rgbaData) {
@@ -4032,11 +4048,16 @@ void FrameBuffer::Impl::setScreenBackground(int width, int height, const uint8_t
         }
     }
 }
-
-void FrameBuffer::Impl::setDisplayLayout(int screenWidth, int screenHeight,
-                                         const Rect& displayRect) {
+#if GFXSTREAM_ENABLE_HOST_GLES
+HandleType FrameBuffer::Impl::getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface) {
     AutoLock mutex(m_lock);
-    m_compositor->setDisplayLayout(screenWidth, screenHeight, displayRect);
+
+    auto it = m_EmulatedEglWindowSurfaceToColorBuffer.find(p_surface);
+    if (it == m_EmulatedEglWindowSurfaceToColorBuffer.end()) {
+        GFXSTREAM_ERROR("Failed to find EmulatedEglWindowSurface:%d", p_surface);
+        return 0;
+    }
+    return it->second;
 }
 
 #ifdef CONFIG_AEMU
@@ -4061,17 +4082,6 @@ void FrameBuffer::Impl::unregisterVulkanInstance(uint64_t id) const {
     get_gfxstream_vm_operations().unregister_vulkan_instance(id);
 }
 #endif
-
-void FrameBuffer::Impl::createTrivialContext(HandleType shared, HandleType* contextOut,
-                                             HandleType* surfOut) {
-    assert(contextOut);
-    assert(surfOut);
-
-    *contextOut = createEmulatedEglContext(0, shared, GLESApi_2);
-    // Zero size is formally allowed here, but SwiftShader doesn't like it and
-    // fails.
-    *surfOut = createEmulatedEglWindowSurface(0, 1, 1);
-}
 
 void FrameBuffer::Impl::createSharedTrivialContext(EGLContext* contextOut, EGLSurface* surfOut) {
     assert(contextOut);
@@ -5456,6 +5466,20 @@ int32_t FrameBuffer::mapGpaToBufferHandle(uint32_t bufferHandle, uint64_t gpa, u
     return mImpl->mapGpaToBufferHandle(bufferHandle, gpa, size);
 }
 
+
+void FrameBuffer::getDeviceInfo(const char** vendor, const char** renderer,
+                               const char** version) const {
+    mImpl->getDeviceInfo(vendor, renderer, version);
+}
+
+bool FrameBuffer::getVulkanEmulationDeviceInfo(char** device_name, char** driver_info,
+                                               uint32_t* driver_version, uint32_t* api_version,
+                                               uint32_t* vendor_id, uint32_t* device_id,
+                                               uint32_t* device_type, uint64_t* device_memory) {
+    return mImpl->getVulkanEmulationDeviceInfo(device_name, driver_info, driver_version,
+                                               api_version, vendor_id, device_id, device_type,
+                                               device_memory);
+}
 #if GFXSTREAM_ENABLE_HOST_GLES
 
 HandleType FrameBuffer::getEmulatedEglWindowSurfaceColorBufferHandle(HandleType p_surface) {
@@ -5499,11 +5523,6 @@ EGLint FrameBuffer::getConfigs(uint32_t bufferSize, GLuint* buffer) {
 
 EGLint FrameBuffer::chooseConfig(EGLint* attribs, EGLint* configs, EGLint configsSize) {
     return mImpl->chooseConfig(attribs, configs, configsSize);
-}
-
-void FrameBuffer::getDeviceInfo(const char** vendor, const char** renderer,
-                               const char** version) const {
-    mImpl->getDeviceInfo(vendor, renderer, version);
 }
 
 HandleType FrameBuffer::createEmulatedEglContext(int p_config, HandleType p_share,
@@ -5618,14 +5637,6 @@ void FrameBuffer::updateYUVTextures(uint32_t type, uint32_t* textures, void* pri
     mImpl->updateYUVTextures(type, textures, privData, func);
 }
 
-bool FrameBuffer::getVulkanEmulationDeviceInfo(char** device_name, char** driver_info,
-                                               uint32_t* driver_version, uint32_t* api_version,
-                                               uint32_t* vendor_id, uint32_t* device_id,
-                                               uint32_t* device_type, uint64_t* device_memory) {
-    return mImpl->getVulkanEmulationDeviceInfo(device_name, driver_info, driver_version,
-                                               api_version, vendor_id, device_id, device_type,
-                                               device_memory);
-}
 
 void FrameBuffer::swapTexturesAndUpdateColorBuffer(uint32_t colorBufferHandle, int x, int y,
                                                    int width, int height, uint32_t format,

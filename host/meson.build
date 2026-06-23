@@ -10,6 +10,9 @@ inc_stream_servers = include_directories('.')
 inc_host_include = include_directories('include')
 
 inc_gl_common = include_directories('gl/glestranslator/common/include')
+# Referenced by host/vulkan even when use_gles=false
+inc_gl_openglesdispatch = include_directories('gl/OpenGLESDispatch/include')
+inc_gl_server = include_directories('gl')
 
 subdir('features')
 subdir('iostream')
@@ -125,9 +128,19 @@ if use_composer
 endif
 
 if not use_gles
-  files_lib_gfxstream_backend += files('native_sub_window_stub.cpp')
+  if host_machine.system() == 'darwin'
+    # Vulkan-only on macOS: use the Metal-backed sub-window implementation.
+    # native_sub_window_cocoa.mm uses NSOpenGL* APIs that are deprecated
+    # in macOS 14 and removed in macOS 26 (Tahoe); native_sub_window_metal.mm
+    # uses only CAMetalLayer and is safe on all supported macOS versions.
+    files_lib_gfxstream_backend += files('native_sub_window_metal.mm')
+  else
+    files_lib_gfxstream_backend += files('native_sub_window_stub.cpp')
+  endif
 elif host_machine.system() == 'darwin'
   files_lib_gfxstream_backend += files('native_sub_window_cocoa.mm')
+  # Also include Metal utilities needed by the Vulkan path
+  files_lib_gfxstream_backend += files('native_sub_window_metal.mm')
 elif host_machine.system() == 'windows'
   files_lib_gfxstream_backend += files('native_sub_window_win32.cpp')
 elif host_machine.system() == 'linux' and use_gles
@@ -164,6 +177,26 @@ if host_machine.system() == 'linux'
     thread_dep,
   ]
   link_args_gfxstream_backend = '-Wl,-lpthread,-lrt,-ldl'
+elif host_machine.system() == 'darwin'
+  deps_gfxstream_backend += [thread_dep]
+  link_args_gfxstream_backend = [
+    '-framework', 'CoreFoundation',
+    '-framework', 'IOKit',
+    '-framework', 'AppKit',
+    '-framework', 'Foundation',
+    '-framework', 'Metal',
+    '-framework', 'QuartzCore',
+  ]
+  if use_gles
+    # host/gl/glestranslator/egl/mac_native.m drives the legacy native
+    # NSOpenGL/CGL path (glBindTexture/CGLTexImageIOSurface2D/etc.) that the
+    # GLES decoder needs on Darwin.
+    link_args_gfxstream_backend += [
+      '-framework', 'OpenGL',
+      '-framework', 'IOSurface',
+      '-framework', 'CoreVideo',
+    ]
+  endif
 endif
 
 if host_machine.system() == 'qnx'
@@ -178,6 +211,13 @@ gfxstream_backend = library(
   'gfxstream_backend',
   files_lib_gfxstream_backend,
   cpp_args: gfxstream_host_args + gfxstream_backend_cpp_args,
+  # .mm (Objective-C++) sources are compiled via a separate arg list from
+  # .cpp; without this, GFXSTREAM_ENABLE_HOST_GLES is never defined for them,
+  # so e.g. native_sub_window_metal.mm's `#if !GFXSTREAM_ENABLE_HOST_GLES`
+  # guard always sees the macro as undefined (== 0) and compiles its
+  # GLES-build-only fallback unconditionally, clashing with
+  # native_sub_window_cocoa.mm when the GLES decoder is also enabled.
+  objcpp_args: gfxstream_host_args + gfxstream_backend_cpp_args,
   include_directories: [inc_gfxstream_backend],
   gnu_symbol_visibility: 'default',
   dependencies: deps_gfxstream_backend,

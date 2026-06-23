@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <stdio.h>
 #include "gles_compat.h"
 #include "native_sub_window.h"
 
@@ -35,3 +36,4 @@ void* getNativeDisplay() {
     fprintf(stderr, "%s: Unimplemented\n", __func__);
     return nullptr;
 }
+

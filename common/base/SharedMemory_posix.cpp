@@ -55,7 +55,11 @@ SharedMemory::SharedMemory(const std::string& name, size_t size) {
         mName = PathUtils::recompose(PathUtils::decompose(std::move(path)));
     } else {
         mShareType = ShareType::SHARED_MEMORY;
+#ifdef __APPLE__
+        mName = (!name.empty() && name[0] != '/') ? ("/" + name) : name;
+#else
         mName = name;
+#endif
     }
 }
 
@@ -111,7 +115,9 @@ int SharedMemory::openInternal(int oflag, int mode, bool doMapping) {
     int err = 0;
     struct stat sb;
     if (mShareType == ShareType::SHARED_MEMORY) {
-#if defined(HAVE_MEMFD_CREATE)
+#if defined(__APPLE__)
+        mFd = ::shm_open(mName.c_str(), oflag, mode);
+#elif defined(HAVE_MEMFD_CREATE)
         mFd = memfd_create(mName.c_str(), MFD_CLOEXEC | MFD_ALLOW_SEALING);
 #else
         mFd = syscall(__NR_memfd_create, mName.c_str(), FD_CLOEXEC);

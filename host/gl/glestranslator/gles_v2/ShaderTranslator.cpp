@@ -378,6 +378,8 @@ void STCompileAndResolve(const ST_ShaderCompileInfo* info, ST_ShaderCompileResul
     } else {
         result->infoLog = strdup("ShaderTranslator: failed to construct ANGLE compiler");
         result->translatedSource = strdup("");
+        result->nameHashingMap = new ST_NameHashingMap();
+        memset(result->nameHashingMap, 0, sizeof(*result->nameHashingMap));
     }
 
     *outResult = result;

@@ -109,6 +109,9 @@ endif
 gfxstream_host_args += '-DGLM_ENABLE_EXPERIMENTAL=1'
 gfxstream_host_args += '-DGFXSTREAM_MESON_BUILD=1'
 gfxstream_host_args += '-DGFXSTREAM_ENABLE_HOST_GLES=@0@'.format(use_gles ? '1' : '0')
+if use_gles
+  gfxstream_host_args += '-DUSE_ANGLE_SHADER_PARSER=1'
+endif
 gfxstream_host_args += '-DVK_BASE_VERSION_1_0'
 gfxstream_host_args += '-DVK_BASE_VERSION_1_1'
 gfxstream_host_args += '-DVK_BASE_VERSION_1_2'

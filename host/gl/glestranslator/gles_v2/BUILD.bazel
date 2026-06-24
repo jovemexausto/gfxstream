@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_shared_library")
 load("//:build_variables.bzl", "GFXSTREAM_HOST_COPTS", "GFXSTREAM_HOST_DEFINES")
 
 package(
@@ -42,4 +42,24 @@ cc_library(
         "//third_party/opengl:gfxstream_gles3_headers",
     ],
     alwayslink = True,
+)
+
+# Standalone wrapper exposing ANGLE's shader translator as a flat C ABI (ST_*), dlopen()ed at
+# runtime by angle_shader_parser.cpp (see ShaderTranslator.h). Built separately from
+# gles_v2_translator_static because the actual gfxstream binary build (Meson) never links ANGLE
+# directly -- only this small shim does, and gfxstream loads it as a prebuilt shared library at
+# runtime, keeping the ~20MB ANGLE translator out of the main process image.
+cc_library(
+    name = "shadertranslator_impl",
+    srcs = ["ShaderTranslator.cpp"],
+    hdrs = ["ShaderTranslator.h"],
+    deps = [
+        "@angle//:angle_translator_headers",
+        "@angle//:translator",
+    ],
+)
+
+cc_shared_library(
+    name = "shadertranslator",
+    deps = [":shadertranslator_impl"],
 )

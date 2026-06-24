@@ -31,13 +31,24 @@ cc_library(
         "src/common/platform_helpers.cpp",
         "src/common/string_utils.cpp",
         "src/common/system_utils.cpp",
-        "src/common/system_utils_linux.cpp",
         "src/common/system_utils_posix.cpp",
         "src/common/third_party/xxhash/xxhash.c",
         "src/common/tls.cpp",
         "src/common/uniform_type_info_autogen.cpp",
         "src/common/utilities.cpp",
-    ],
+    ] + select({
+        "@platforms//os:macos": [
+            "src/common/system_utils_apple.cpp",
+            "src/common/system_utils_mac.cpp",
+        ],
+        "@platforms//os:windows": [
+            "src/common/system_utils_win.cpp",
+            "src/common/system_utils_win32.cpp",
+        ],
+        "//conditions:default": [
+            "src/common/system_utils_linux.cpp",
+        ],
+    }),
     hdrs = [
         "src/common/BinaryStream.h",
         "src/common/CircularBuffer.h",
@@ -211,8 +222,14 @@ cc_library(
         "@platforms//os:linux": [
             "third_party/glslang/src/glslang/OSDependent/Unix/ossource.cpp",
         ],
+        "@platforms//os:macos": [
+            "third_party/glslang/src/glslang/OSDependent/Unix/ossource.cpp",
+        ],
         "@platforms//os:windows": [
             "third_party/glslang/src/glslang/OSDependent/Windows/ossource.cpp",
+        ],
+        "//conditions:default": [
+            "third_party/glslang/src/glslang/OSDependent/Unix/ossource.cpp",
         ],
     }),
     hdrs = glob([

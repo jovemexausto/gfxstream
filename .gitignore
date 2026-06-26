@@ -296,3 +296,6 @@ TestResults.qpa
 .cache/
 compile_commands.json
 .gdb_history
+
+# meson custom_target stamp files (build artifacts)
+*.stamp

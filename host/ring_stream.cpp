@@ -248,6 +248,28 @@ const unsigned char* RingStream::readRaw(void* buf, size_t* inout_len) {
             if (mUnavailableReadCount >= kMaxUnavailableReads) {
                 *(mContext.host_state) = ASG_HOST_STATE_NEED_NOTIFY;
 
+                // Close the ASG host/guest lost-wakeup race. The guest only pings
+                // (ASG_NOTIFY_AVAILABLE -> Wakeup) when it observes host_state ==
+                // NEED_NOTIFY; if it wrote a request into the ring and sampled
+                // host_state while we still advertised CAN_CONSUME (just above, before
+                // this store), it will NOT ping, and onUnavailableRead()'s blocking
+                // receive() below would sleep forever on data that is already present.
+                // After publishing NEED_NOTIFY, issue a StoreLoad barrier and re-check
+                // both rings: this makes the host store(NEED_NOTIFY)+load(ring) and the
+                // guest store(ring)+load(host_state) mutually visible, so at least one
+                // side observes the other and the wakeup cannot be lost. Without this
+                // the boot is racy (SurfaceFlinger / the HWC HAL intermittently block
+                // ~16s on their first host round-trip, tripping system_server's
+                // Watchdog and looping zygote).
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                if (ring_buffer_available_read(mContext.to_host, 0) ||
+                    ring_buffer_available_read(mContext.to_host_large_xfer.ring,
+                                               &mContext.to_host_large_xfer.view)) {
+                    *(mContext.host_state) = ASG_HOST_STATE_CAN_CONSUME;
+                    mUnavailableReadCount = 0;
+                    continue;
+                }
+
                 bool sleeping = false;
                 do {
                     const AsgOnUnavailableReadStatus status = mCallbacks.onUnavailableRead();

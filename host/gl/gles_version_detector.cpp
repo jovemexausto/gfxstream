@@ -129,8 +129,31 @@ bool shouldEnableCoreProfile() {
     int dispatchMaj, dispatchMin;
 
     get_gfxstream_gles_version(&dispatchMaj, &dispatchMin);
+#ifdef __APPLE__
+    // On macOS the host desktop GL exposes >2.1 features only through a Core
+    // profile context -- Apple ships no 3.x *compatibility* profile, only a
+    // legacy 2.1 compatibility context or a 3.2+/4.1 Core context. The
+    // upstream condition (renderer == SELECTED_RENDERER_HOST) is false here
+    // (the macOS renderer enum differs), so Core never got enabled and every
+    // context was created legacy 2.1. The translator's internal shaders (the
+    // blit/texture_draw helpers in gles_context.cpp / texture_draw.cpp) emit
+    // GLSL ES 3.00 when !isCoreProfile(); a legacy 2.1 context rejects
+    // `#version 300 es` ("version '300' is not supported"), leaving a broken
+    // program whose draw -- reached via eglBlitFromCurrentReadBufferANDROID ->
+    // blitFromReadBuffer during a GLES window-surface flush -- hangs the Metal
+    // command stream. That wedges the whole renderer, because the flush holds
+    // the global FrameBuffer lock, and transitively blocks SurfaceFlinger's
+    // compose, DisplayManagerService, and thus sys.boot_completed.
+    //
+    // Force Core whenever the host exposes >2 GLES, so EGL context creation
+    // requests a 3.2+/4.1 Core context (egl_os_api_darwin already supports it
+    // via setupCoreProfileNativeFormats) and the internal shaders emit
+    // `#version 330 core`, which the Core context compiles.
+    return dispatchMaj > 2;
+#else
     return get_gfxstream_renderer() == SELECTED_RENDERER_HOST &&
            dispatchMaj > 2;
+#endif
 }
 
 void sAddExtensionIfSupported(GLESDispatchMaxVersion currVersion,

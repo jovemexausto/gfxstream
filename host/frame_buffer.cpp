@@ -4972,7 +4972,20 @@ void FrameBuffer::Impl::asyncWaitForGpuWithCb(uint64_t eglsync, FenceCompletionC
     EmulatedEglFenceSync* fenceSync = EmulatedEglFenceSync::getFromHandle(eglsync);
 
     if (!fenceSync) {
-        GFXSTREAM_ERROR("err: fence sync 0x%llx not found", (unsigned long long)eglsync);
+        // EmulatedEglFenceSync with destroyWhenSignaled=true removes itself from the
+        // handle registry as soon as it signals (see decRef()/destroy()), via the
+        // render-control/pipe channel. The GFXSTREAM_CREATE_EXPORT_SYNC command that
+        // leads here arrives over the separate virtio-gpu command channel, with no
+        // ordering guarantee relative to that signal+self-destruct. A sync that
+        // signals fast enough can vanish from the registry before this lookup runs.
+        // That's not an error -- it means the wait is already satisfied -- so invoke
+        // the completion callback now instead of silently dropping it: dropping it
+        // leaves whoever's waiting on it (e.g. RanchuHwc's virtio-gpu timeline task,
+        // and transitively the guest's DRM fence wait backing a composite/present
+        // call) blocked forever.
+        GFXSTREAM_ERROR("fence sync 0x%llx not found, treating as already signaled",
+                         (unsigned long long)eglsync);
+        cb();
         return;
     }
 

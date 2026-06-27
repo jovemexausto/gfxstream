@@ -121,11 +121,28 @@ using gfxstream::host::vk::PostWorkerVk;
     }
 
 bool postOnlyOnMainThread() {
-#if defined(__APPLE__) && !defined(QEMU_NEXT)
-    return true;
-#else
+    // Upstream (AEMU) returns true here on macOS: AEMU runs a real Cocoa/Qt UI
+    // thread with an NSApp run loop, and PostWorker::runTask's
+    // m_mainThreadPostingOnly branch posts compose/post tasks onto it via
+    // gfxstream_window_ops::run_on_ui_thread.
+    //
+    // Capivara has no such UI thread -- it's a headless libkrun/HVF VMM and
+    // never calls set_gfxstream_window_operations(), so
+    // get_gfxstream_window_operations() always returns the default no-op
+    // stub (host/common/window_operations.cpp:
+    // DefaultGfxstreamWindowRunOnUiThread literally discards the task without
+    // running it). Returning true here on Apple unconditionally silently
+    // dropped every PostCmd::Compose task forever: FrameBuffer::compose()'s
+    // completeFuture.wait() then blocked indefinitely, which surfaced as
+    // RanchuHwc's presentDisplay (and everything downstream depending on a
+    // composited frame, e.g. system_server's DisplayManagerService) hanging
+    // forever -- confirmed by instrumenting composeImpl (0 calls) vs.
+    // PostWorker::runTask (mainThreadPostingOnly=1, no-op branch taken).
+    //
+    // Always run on the PostWorker's own thread instead -- the same thread
+    // that already, demonstrably, processes every other Post/Compose-adjacent
+    // command on this platform.
     return false;
-#endif
 }
 
 static FrameBuffer* sFrameBuffer = NULL;

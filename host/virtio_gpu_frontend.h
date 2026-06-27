@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
 extern "C" {
@@ -147,7 +148,29 @@ class VirtioGpuFrontend {
     //
     // LINT.IfChange(virtio_gpu_frontend)
     std::unordered_map<VirtioGpuContextId, VirtioGpuContext> mContexts;
-    std::unordered_map<VirtioGpuResourceId, VirtioGpuResource> mResources;
+    //
+    // mResources is read from both the dispatch thread (holding the Rust-side
+    // Arc<Mutex<VirtioGpu>>) and a deferred TransferFromHost3d reader thread
+    // (deliberately NOT holding that lock, by design -- see
+    // rutabaga_gfx::transfer_read_blocking_by_id and libkrun
+    // worker.rs/process_queue's comments) -- plus, per gfxstream's own
+    // architecture, any of SyncThread's worker-pool threads that end up
+    // running a fence/compose completion callback. None of those call sites
+    // share a single lock today, so a `VirtioGpuResource` stored by value can
+    // be erased/move-assigned out from under an in-flight reader -> dangling
+    // mIovs/mLinear -> SIGSEGV in TransferWithIov (observed repeatedly; see
+    // patches/README.md libkrun 0010 and the capivara-compose-loop-blocker
+    // memory note for the full diagnostic trail).
+    //
+    // shared_ptr + a short-lived mutex around just the map operations (not
+    // any blocking I/O) fixes this without reintroducing the dispatcher
+    // deadlock libkrun 0007 exists to avoid: a caller copies the shared_ptr
+    // under mResourcesMutex, releases the lock immediately, then does its
+    // (possibly slow) work through that copy -- the resource stays alive for
+    // as long as any copy of the shared_ptr does, even if another thread
+    // erases it from the map in the meantime.
+    mutable std::mutex mResourcesMutex;
+    std::unordered_map<VirtioGpuResourceId, std::shared_ptr<VirtioGpuResource>> mResources;
     std::unordered_map<uint64_t, std::shared_ptr<SyncDescriptorInfo>> mSyncMap;
     // When we wait for gpu or wait for gpu vulkan, the next (and subsequent)
     // fences created for that context should not be signaled immediately.

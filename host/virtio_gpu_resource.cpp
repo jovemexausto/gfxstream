@@ -550,7 +550,13 @@ int VirtioGpuResource::ReadFromPipeToLinear(uint64_t offset, stream_renderer_box
         return -EINVAL;
     }
 
-    if (!mHostPipe) {
+    // Hold a strong ref to the pipe for the duration of the (blocking) transfer.
+    // A deferred TransferFromHost3d read runs on a separate thread; if the guest
+    // detaches this resource from its context concurrently, DetachFromContext sets
+    // mHostPipe = nullptr and would otherwise free the pipe (and its RenderChannel)
+    // out from under this in-flight read -> SIGSEGV. The local copy keeps it alive.
+    auto hostPipe = mHostPipe;
+    if (!hostPipe) {
         GFXSTREAM_ERROR("Failed to transfer: resource %d missing PIPE.", mId);
         return -EINVAL;
     }
@@ -561,7 +567,7 @@ int VirtioGpuResource::ReadFromPipeToLinear(uint64_t offset, stream_renderer_box
         return -EINVAL;
     }
 
-    return mHostPipe->TransferFromHost(mLinear.data() + box->x, box->w);
+    return hostPipe->TransferFromHost(mLinear.data() + box->x, box->w);
 }
 
 int VirtioGpuResource::WriteToPipeFromLinear(uint64_t offset, stream_renderer_box* box) {
@@ -575,13 +581,16 @@ int VirtioGpuResource::WriteToPipeFromLinear(uint64_t offset, stream_renderer_bo
         return -EINVAL;
     }
 
+    // Strong ref for the duration of the transfer; see ReadFromPipeToLinear.
+    // (Previously this copied mHostPipe but then dereferenced the member directly,
+    // defeating the purpose.)
     auto hostPipe = mHostPipe;
-    if (!mHostPipe) {
+    if (!hostPipe) {
         GFXSTREAM_ERROR("No hostPipe");
         return -EINVAL;
     }
 
-    return mHostPipe->TransferToHost(mLinear.data() + box->x, box->w);
+    return hostPipe->TransferToHost(mLinear.data() + box->x, box->w);
 }
 
 int VirtioGpuResource::ReadFromBufferToLinear(uint64_t offset, stream_renderer_box* box) {

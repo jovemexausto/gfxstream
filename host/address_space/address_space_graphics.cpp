@@ -21,10 +21,16 @@
 #include "gfxstream/host/address_space_device.h"
 #include "gfxstream/common/logging.h"
 #include "gfxstream/host/sub_allocator.h"
+#include "gfxstream/system/System.h"
 #include "render-utils/address_space_operations.h"
 
 namespace gfxstream {
 namespace host {
+
+// Max time the ASG consumer blocks in onUnavailableRead() before re-polling the
+// ring, so a lost guest Wakeup (dropped trySend under a write burst) self-heals
+// instead of deadlocking. See onUnavailableRead().
+static constexpr uint64_t kAsgOnUnavailableReadTimeoutUs = 10000;  // 10ms
 
 struct AllocationCreateInfo {
     bool virtioGpu;
@@ -620,9 +626,26 @@ void AddressSpaceGraphicsContext::perform(AddressSpaceDevicePingInfo* info) {
 }
 
 AsgOnUnavailableReadStatus AddressSpaceGraphicsContext::onUnavailableRead() {
-    ConsumerCommand cmd;
-    mConsumerMessages.receive(&cmd);
-    switch (cmd) {
+    // Bounded wait instead of an unbounded receive(). The guest wakes us via
+    // trySend(Wakeup) (ASG_NOTIFY_AVAILABLE) -- a NON-blocking send that silently
+    // drops the message if this 4-slot channel is momentarily full, which happens
+    // under a write burst (e.g. SurfaceFlinger's RenderEngine compositing a
+    // screen capture / virtual display floods the ASG ring). RingStream::readRaw's
+    // NEED_NOTIFY re-check only closes the race for data already in the ring at the
+    // moment we decide to sleep; if a Wakeup is lost while the guest is blocked
+    // filling the ring, an unbounded receive() here deadlocks -- guest stuck in
+    // ring_buffer write, host asleep forever (observed: screencap / screenrecord /
+    // scrcpy capture hang indefinitely). Waking periodically makes readRaw re-poll
+    // the ring and drain it, self-healing a lost wakeup. A real Wakeup still returns
+    // immediately, so the steady state is unchanged; the timeout only adds a small
+    // idle re-check.
+    auto cmd = mConsumerMessages.timedReceive(
+        gfxstream::base::getUnixTimeUs() + kAsgOnUnavailableReadTimeoutUs);
+    if (!cmd) {
+        // Timed out with no command: tell readRaw to re-check the ring.
+        return AsgOnUnavailableReadStatus::kContinue;
+    }
+    switch (*cmd) {
         case ConsumerCommand::Wakeup:
             return AsgOnUnavailableReadStatus::kContinue;
         case ConsumerCommand::Exit:
@@ -634,6 +657,7 @@ AsgOnUnavailableReadStatus AddressSpaceGraphicsContext::onUnavailableRead() {
         case ConsumerCommand::ResumePostSnapshot:
             return AsgOnUnavailableReadStatus::kResumeAfterSnapshot;
     }
+    return AsgOnUnavailableReadStatus::kContinue;
 }
 
 AddressSpaceDeviceType AddressSpaceGraphicsContext::getDeviceType() const {

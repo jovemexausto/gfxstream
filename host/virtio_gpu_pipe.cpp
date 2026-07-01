@@ -150,6 +150,18 @@ int VirtioGpuRenderThreadPipe::TransferToHost(const char* data, size_t dataSize)
 
 int VirtioGpuRenderThreadPipe::TransferFromHost(char* outRequestedData, size_t requestedDataSize) {
     size_t received = 0;
+    // Capivara: bound total starvation. readBefore() below already times out every
+    // 10ms, but the loop just retries -- so if the per-context RenderThread never
+    // produces the requested bytes (e.g. the guest-side compose that should feed this
+    // read never completes, as happens on offscreen capture/screencap), this spins
+    // forever. Worse, it runs on a deferred "gpu xfer" thread that holds a per-resource
+    // FIFO ticket, so a single starved read wedges every later read on that resource
+    // and freezes the whole VM. Fail the read instead once no byte has arrived for a
+    // prolonged period; the guest sees a short/EIO read and its capture fails
+    // gracefully rather than hanging the VM. Legitimate (progressing) reads reset the
+    // deadline on every chunk, so only true starvation trips it.
+    static const RenderChannel::Duration kStarvationTimeoutUs = 5000000;  // 5s of zero progress
+    auto lastProgressUs = gfxstream::base::getUnixTimeUs();
     while (received < requestedDataSize) {
         // Try to get some data from the RenderThread.
         if (mReadBuffer.empty()) {
@@ -160,6 +172,14 @@ int VirtioGpuRenderThreadPipe::TransferFromHost(char* outRequestedData, size_t r
                 mChannel->readBefore(&mReadBuffer, currTime + kBlockAtMostUs);
             if (result == RenderChannel::IoResult::Timeout ||
                 result == RenderChannel::IoResult::TryAgain) {
+                if (gfxstream::base::getUnixTimeUs() - lastProgressUs > kStarvationTimeoutUs) {
+                    GFXSTREAM_ERROR(
+                        "TransferFromHost starved: received %zu of %zu bytes with no progress "
+                        "for %llds; failing the read to avoid wedging the VM.",
+                        received, requestedDataSize,
+                        (long long)(kStarvationTimeoutUs / 1000000));
+                    return EIO;
+                }
                 continue;
             } else if (result != RenderChannel::IoResult::Ok) {
                 GFXSTREAM_ERROR("Failed to read data from RenderChannel.");
@@ -173,6 +193,7 @@ int VirtioGpuRenderThreadPipe::TransferFromHost(char* outRequestedData, size_t r
         const size_t toCopy = std::min(requestedSizeRemaining, availableSize);
         std::memcpy(outRequestedData + received, mReadBuffer.data(), toCopy);
         received += toCopy;
+        lastProgressUs = gfxstream::base::getUnixTimeUs();  // made progress; reset deadline
 
         if (toCopy == availableSize) {
             mReadBuffer.clear();

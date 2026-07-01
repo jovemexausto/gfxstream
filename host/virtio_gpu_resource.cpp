@@ -378,7 +378,20 @@ void VirtioGpuResource::AttachToContext(VirtioGpuContextId contextId) {
 void VirtioGpuResource::DetachFromContext(VirtioGpuContextId contextId) {
     mAttachedToContexts.erase(contextId);
     mLatestAttachedContext.reset();
-    mHostPipe = nullptr;
+    // Capivara: do NOT null mHostPipe here. mHostPipe is a shared_ptr and a deferred
+    // TransferFromHost3d read captured before this detach still holds a strong ref, so
+    // the pipe object never dangles (that UAF is what patch 0014's local copy already
+    // covers). But nulling the *resource's* pointer made any read that STARTS after the
+    // detach fail with "missing PIPE" -- and during composition the guest rapidly
+    // detaches/reattaches/reuses resource ids, so an in-flight or just-spawned deferred
+    // read routinely lost its pipe mid-flight, its reply never reached the guest, and the
+    // guest's RenderThread stalled (the "missing PIPE" storm). We can't drain the read
+    // first (wait_idle deadlocks the dispatcher). Instead let shared_ptr refcounting own
+    // the lifetime: the pipe is released when the resource is destroyed (Unref ->
+    // ~VirtioGpuResource) or reassigned (SetHostPipe), and any in-flight read keeps it
+    // alive until it finishes. Detaching from a context does not, by itself, invalidate
+    // the pipe the resource is still transferring over.
+    (void)contextId;
 }
 
 std::unordered_set<VirtioGpuContextId> VirtioGpuResource::GetAttachedContexts() const {

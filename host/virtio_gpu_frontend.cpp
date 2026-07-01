@@ -696,7 +696,16 @@ void VirtioGpuFrontend::fillCaps(uint32_t set, void* caps) {
             if (fb->hasEmulationVk()) {
                 const auto info = fb->getRepresentativeColorBufferMemoryTypeInfo();
                 capset->colorBufferMemoryIndex = info.guestMemoryTypeIndex;
-                capset->deferredMapping = 1;
+                // Capivara/macOS: deferredMapping makes the guest ResourceTracker treat every
+                // host-visible allocation as "dedicated" -- its own >=16 MiB CoherentMemory
+                // block, never sub-allocated (see mesa getCoherentMemory: `if (dedicated)
+                // continue`). Skia's RenderEngine allocates many small persistently-mapped
+                // vertex/upload buffers per compose, so each grabs a fresh dedicated blob and
+                // the host-visible blob window fragments/exhausts -> intermittent
+                // "Could not allocate vertices" -> partially-black composites. Advertising
+                // deferredMapping=0 puts the guest back on the shared-arena sub-allocation
+                // path (the Linux default), so the small buffers share 16 MiB arenas.
+                capset->deferredMapping = 0;
             }
 
             if (mFeatures.VulkanBatchedDescriptorSetUpdate.enabled()) {

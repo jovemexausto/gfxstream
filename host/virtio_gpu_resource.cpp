@@ -272,12 +272,27 @@ std::optional<VirtioGpuResource> VirtioGpuResource::Create(
                 descriptorInfoOpt = ExternalObjectManager::get()->removeBlobDescriptorInfo(
                     contextId, createBlobArgs->blob_id);
             }
-            if (!descriptorInfoOpt) {
-                GFXSTREAM_ERROR("Failed to create blob: no external blob descriptor.");
-                return std::nullopt;
+            if (descriptorInfoOpt) {
+                resource.mBlobMemory.emplace(
+                    std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
+            } else {
+                // Capivara/macOS: on the Metal backend, host-visible VkDeviceMemory is
+                // registered via addMapping (MoltenVK exposes no exportable external
+                // memory handle, so vkGetBlobInternal skips the ExternalBlob export path
+                // and maps the memory directly). ExternalBlob is still "enabled" as a
+                // feature, so this descriptor branch runs -- but there is no descriptor,
+                // only a mapping. Fall back to the mapping path here so the host-visible
+                // blob succeeds; otherwise the guest gets VK_ERROR_OUT_OF_DEVICE_MEMORY
+                // for every host-visible allocation (Skia RenderEngine readback staging,
+                // gralloc), which manifests as blank screencaps.
+                auto memoryMappingOpt = ExternalObjectManager::get()->removeMapping(
+                    contextId, createBlobArgs->blob_id);
+                if (!memoryMappingOpt) {
+                    GFXSTREAM_ERROR("Failed to create blob: no external blob descriptor or mapping.");
+                    return std::nullopt;
+                }
+                resource.mBlobMemory.emplace(std::move(*memoryMappingOpt));
             }
-            resource.mBlobMemory.emplace(
-                std::make_shared<BlobDescriptorInfo>(std::move(*descriptorInfoOpt)));
         }
     } else {
         auto memoryMappingOpt =

@@ -125,6 +125,24 @@ EmulatedPhysicalDeviceMemoryProperties::EmulatedPhysicalDeviceMemoryProperties(
         }
     }
 
+    // Capivara/macOS: expose host-visible memory as NON-device-local. On Apple
+    // Silicon (unified memory) MoltenVK reports every host-visible type as also
+    // DEVICE_LOCAL. Skia's Vulkan allocator (VMA), for its persistently-mapped
+    // CpuToGpu upload buffers (vertices), wants a host-visible type that is NOT
+    // device-local (system RAM staging); with only a device-local+host-visible type
+    // available its allocation fails ("Could not allocate vertices"), which blanks
+    // the RenderEngine composite and every offscreen capture (screencap/scrcpy).
+    // Strip DEVICE_LOCAL from host-visible guest types so VMA takes its normal
+    // host-visible path. Device-local-only allocations (ColorBuffers request
+    // VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) still find the pure DEVICE_LOCAL type[0].
+    for (uint32_t i = 0; i < mGuestMemoryProperties.memoryTypeCount; i++) {
+        if (mGuestMemoryProperties.memoryTypes[i].propertyFlags &
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
+            mGuestMemoryProperties.memoryTypes[i].propertyFlags &=
+                ~VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        }
+    }
+
     // If enabled, reserve an additional memory type for AHB backed buffers and images
     // so that the host can control its memory properties. This ensures that the guest
     // only sees `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` and will not try to map the

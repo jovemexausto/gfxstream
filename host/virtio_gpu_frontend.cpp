@@ -931,10 +931,16 @@ int VirtioGpuFrontend::createBlob(uint32_t contextId, uint32_t resourceId,
 int VirtioGpuFrontend::resourceMap(uint32_t resourceId, void** hvaOut, uint64_t* sizeOut) {
     D("resource: %u", resourceId);
 
-    if (mFeatures.ExternalBlob.enabled()) {
-        GFXSTREAM_ERROR("Failed to map resource: external blob enabled.");
-        return -EINVAL;
-    }
+    // Capivara/macOS: this used to refuse outright whenever ExternalBlob is
+    // enabled, on the assumption that every blob is exported to the VMM as a
+    // descriptor and mapped there. On the Metal/MoltenVK backend host-visible
+    // VkDeviceMemory has no exportable external-memory handle, so those blobs
+    // are registered with a direct host mapping instead of a descriptor (see
+    // the fallback in VirtioGpuResource::Create). Let VirtioGpuResource::Map
+    // decide: mapping-backed blobs return their host pointer; descriptor-backed
+    // blobs still fail with -EINVAL ("no mappable memory"). Without this, every
+    // guest RESOURCE_MAP_BLOB on a host-visible arena fails and SkiaVk cannot
+    // allocate (VK_ERROR_OUT_OF_DEVICE_MEMORY -> blank offscreen composition).
 
     std::shared_ptr<VirtioGpuResource> resource;
     {

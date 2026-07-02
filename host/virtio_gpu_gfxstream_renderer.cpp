@@ -118,6 +118,15 @@ ParseGfxstreamFeatures(const int rendererFlags,
         &features, VulkanNullOptionalStrings, true);
     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
         &features, VulkanQueueSubmitWithCommands, true);
+    // Advertise a second (virtual) graphics queue that forwards to the single
+    // underlying MoltenVK queue. Android HWUI's Vulkan pipeline hard-requires a
+    // graphics family with queueCount >= kRequestedQueueCount (2) and
+    // LOG_ALWAYS_FATALs otherwise, which aborts every app RenderThread the
+    // moment ro.hwui.use_vulkan is set -- MoltenVK exposes only one queue per
+    // family. The device-create path already downgrades the guest's 2-queue
+    // request to 1 for the real driver (see vk_decoder_global_state.cpp).
+    GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
+        &features, VulkanVirtualQueue, true);
     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
         &features, VulkanShaderFloat16Int8, true);
     GFXSTREAM_SET_BOOL_FEATURE_ON_CONDITION(
